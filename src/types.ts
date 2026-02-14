@@ -66,11 +66,16 @@ export interface Memory {
   metadata?: Record<string, unknown>;
 }
 
-/** Bootstrap response — matches BootstrapResponse from memory service models.py */
+export interface CrossProjectMemory {
+  memory: Memory;
+  origin_project?: string | null;
+}
+
 export interface BootstrapResponse {
   project_id?: string | null;
   state?: Record<string, unknown> | null;
   memories?: Memory[];
+  cross_project?: CrossProjectMemory[];
   recent_episodes?: Array<{ id: string; summary: string; created_at: number }>;
   constraints?: Memory[];
   failed_approaches?: Memory[];

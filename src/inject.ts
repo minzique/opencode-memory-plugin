@@ -1,5 +1,5 @@
 import type { Model } from "@opencode-ai/sdk";
-import type { BootstrapResponse, Memory } from "./types.js";
+import type { BootstrapResponse, CrossProjectMemory, Memory } from "./types.js";
 import { bootstrap } from "./memory-client.js";
 
 // ~4 chars per token (conservative estimate)
@@ -103,6 +103,18 @@ function buildTieredSections(data: BootstrapResponse): TieredSection[] {
     });
   }
 
+  if (data.cross_project && data.cross_project.length > 0) {
+    const lines = data.cross_project.map((cp: CrossProjectMemory) => {
+      const origin = cp.origin_project ? ` (from: ${cp.origin_project})` : " (global)";
+      return `- [${cp.memory.type}]${origin} ${cp.memory.content}`;
+    });
+    sections.push({
+      tier: 3,
+      label: "## Cross-Project Knowledge",
+      content: lines.join("\n"),
+    });
+  }
+
   if (data.recent_episodes && data.recent_episodes.length > 0) {
     sections.push({
       tier: 4,
@@ -181,6 +193,7 @@ export async function buildInjection(
 
   const hasContent =
     (data.memories?.length ?? 0) > 0 ||
+    (data.cross_project?.length ?? 0) > 0 ||
     (data.constraints?.length ?? 0) > 0 ||
     (data.failed_approaches?.length ?? 0) > 0 ||
     data.state != null ||
