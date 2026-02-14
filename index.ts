@@ -8,6 +8,7 @@ import {
   remember,
   extract,
   saveState,
+  bootstrap,
 } from "./src/memory-client.js";
 import { ContentBuffer } from "./src/buffer.js";
 
@@ -177,11 +178,63 @@ export const MemoryPlugin: Plugin = async ({ directory }) => {
       const todos = sessionTodos.get(input.sessionID);
       await captureRichSessionState(input.sessionID, projectId, meta, todos);
 
+      // Compaction uses gemini-3-flash (1M context) — dump full context for richer summaries
       output.context.push(
         "IMPORTANT: When summarizing, preserve all decisions, constraints, " +
           "failure patterns, and architectural choices. These feed the persistent " +
           "memory system — losing them degrades future sessions.",
       );
+
+      // Load full bootstrap and inject into compaction context so the summary includes everything
+      const bootstrapData = await bootstrap({
+        project_id: projectId,
+        include_episodes: true,
+        max_memories: 30,
+      });
+
+      if (bootstrapData) {
+        const sections: string[] = [];
+        const { state, constraints, failed_approaches, memories, recent_episodes } = bootstrapData;
+
+        if (state && Object.keys(state).length > 0) {
+          sections.push("PERSISTED STATE:\n" + JSON.stringify(state, null, 2));
+        }
+
+        if (constraints && constraints.length > 0) {
+          sections.push(
+            "ACTIVE CONSTRAINTS:\n" +
+              constraints.map((m) => `- ${m.content}`).join("\n"),
+          );
+        }
+
+        if (failed_approaches && failed_approaches.length > 0) {
+          sections.push(
+            "KNOWN FAILURES (do not repeat):\n" +
+              failed_approaches.map((m) => `- ${m.content}`).join("\n"),
+          );
+        }
+
+        if (memories && memories.length > 0) {
+          sections.push(
+            "KEY MEMORIES:\n" +
+              memories.map((m) => `- [${m.type}] ${m.content}`).join("\n"),
+          );
+        }
+
+        if (recent_episodes && recent_episodes.length > 0) {
+          sections.push(
+            "PRIOR SESSION SUMMARIES:\n" +
+              recent_episodes.map((e) => `- ${e.summary}`).join("\n"),
+          );
+        }
+
+        if (sections.length > 0) {
+          output.context.push(
+            "PERSISTENT MEMORY (include relevant items in your summary):\n\n" +
+              sections.join("\n\n"),
+          );
+        }
+      }
     },
 
     tool: {
