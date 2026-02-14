@@ -66,22 +66,27 @@ export interface Memory {
   metadata?: Record<string, unknown>;
 }
 
-/** Bootstrap response from the service */
+/** Bootstrap response — matches BootstrapResponse from memory service models.py */
 export interface BootstrapResponse {
-  project_id: string;
-  working_state: Record<string, unknown> | null;
-  memories: Memory[];
-  episodes: Array<{ id: string; summary: string; created_at: string }>;
-  constraints: Memory[];
-  recent_failures: Memory[];
-  context_budget_used: number;
+  project_id?: string | null;
+  state?: Record<string, unknown> | null;
+  memories?: Memory[];
+  recent_episodes?: Array<{ id: string; summary: string; created_at: number }>;
+  constraints?: Memory[];
+  failed_approaches?: Memory[];
 }
 
-/** Recall response */
+/** A single recall result — memory + similarity score */
+export interface RecallResult {
+  memory: Memory;
+  similarity: number;
+}
+
+/** Recall response matching the actual API shape */
 export interface RecallResponse {
   query: string;
-  results: Array<Memory & { score: number }>;
-  count: number;
+  results: RecallResult[];
+  total: number;
 }
 
 /** Extracted memory from an event — intermediate before posting */

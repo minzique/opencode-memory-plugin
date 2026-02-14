@@ -44,6 +44,8 @@ export const rememberTool = tool({
     });
 
     if (!result) return "Failed to store memory — service may be unavailable.";
+    if (result.status === "duplicate") return `Memory already exists: ${result.id}`;
+    if (result.status === "consolidated") return `Memory merged into existing: ${result.id}`;
     return `Memory stored: ${result.id}`;
   },
 });
@@ -74,12 +76,12 @@ export const recallTool = tool({
     });
 
     if (!result) return "Memory service unavailable.";
-    if (result.count === 0) return "No matching memories found.";
+    if (result.total === 0) return "No matching memories found.";
 
     return result.results
       .map(
-        (m) =>
-          `[${m.type}] (score: ${m.score.toFixed(2)}) ${m.content}${m.tags.length > 0 ? ` [tags: ${m.tags.join(", ")}]` : ""}`,
+        (r) =>
+          `[${r.memory.type}] (similarity: ${r.similarity.toFixed(2)}) ${r.memory.content}${r.memory.tags.length > 0 ? ` [tags: ${r.memory.tags.join(", ")}]` : ""}`,
       )
       .join("\n\n");
   },
@@ -105,39 +107,39 @@ export const bootstrapTool = tool({
 
     const sections: string[] = [];
 
-    if (result.working_state) {
+    if (result.state) {
       sections.push(
         "## Working State\n" +
-          JSON.stringify(result.working_state, null, 2),
+          JSON.stringify(result.state, null, 2),
       );
     }
 
-    if (result.constraints.length > 0) {
+    if (result.constraints && result.constraints.length > 0) {
       sections.push(
         "## Constraints\n" +
           result.constraints.map((m) => `- ${m.content}`).join("\n"),
       );
     }
 
-    if (result.recent_failures.length > 0) {
+    if (result.failed_approaches && result.failed_approaches.length > 0) {
       sections.push(
         "## Recent Failures\n" +
-          result.recent_failures.map((m) => `- ${m.content}`).join("\n"),
+          result.failed_approaches.map((m) => `- ${m.content}`).join("\n"),
       );
     }
 
-    if (result.memories.length > 0) {
+    if (result.memories && result.memories.length > 0) {
       sections.push(
         "## Memories\n" +
           result.memories.map((m) => `- [${m.type}] ${m.content}`).join("\n"),
       );
     }
 
-    if (result.episodes.length > 0) {
+    if (result.recent_episodes && result.recent_episodes.length > 0) {
       sections.push(
         "## Episodes\n" +
-          result.episodes
-            .map((e) => `- ${e.created_at}: ${e.summary}`)
+          result.recent_episodes
+            .map((e) => `- ${e.summary}`)
             .join("\n"),
       );
     }

@@ -11,29 +11,29 @@ function formatBootstrap(data: BootstrapResponse): string {
   const sections: string[] = [];
 
   // Working state — most valuable, goes first
-  if (data.working_state && Object.keys(data.working_state).length > 0) {
+  if (data.state && Object.keys(data.state).length > 0) {
     sections.push(
-      "## Last Session State\n" + JSON.stringify(data.working_state, null, 2),
+      "## Last Session State\n" + JSON.stringify(data.state, null, 2),
     );
   }
 
   // Constraints — user preferences/directives
-  if (data.constraints.length > 0) {
+  if (data.constraints && data.constraints.length > 0) {
     sections.push(
       "## Constraints\n" + data.constraints.map(formatMemory).join("\n"),
     );
   }
 
   // Recent failures — avoid repeating mistakes
-  if (data.recent_failures.length > 0) {
+  if (data.failed_approaches && data.failed_approaches.length > 0) {
     sections.push(
       "## Recent Failures (avoid repeating)\n" +
-        data.recent_failures.map(formatMemory).join("\n"),
+        data.failed_approaches.map(formatMemory).join("\n"),
     );
   }
 
   // Key memories — decisions, patterns, facts
-  const keyMemories = data.memories.filter(
+  const keyMemories = (data.memories ?? []).filter(
     (m) => !["failure", "constraint"].includes(m.type),
   );
   if (keyMemories.length > 0) {
@@ -43,11 +43,11 @@ function formatBootstrap(data: BootstrapResponse): string {
   }
 
   // Episodes — prior session summaries
-  if (data.episodes.length > 0) {
+  if (data.recent_episodes && data.recent_episodes.length > 0) {
     sections.push(
       "## Prior Sessions\n" +
-        data.episodes
-          .map((e) => `- ${e.created_at}: ${e.summary}`)
+        data.recent_episodes
+          .map((e) => `- ${e.summary}`)
           .join("\n"),
     );
   }
@@ -77,13 +77,12 @@ export async function buildInjection(
 
   if (!data) return null;
 
-  // Skip injection if there's nothing useful
   const hasContent =
-    data.memories.length > 0 ||
-    data.constraints.length > 0 ||
-    data.recent_failures.length > 0 ||
-    data.working_state !== null ||
-    data.episodes.length > 0;
+    (data.memories?.length ?? 0) > 0 ||
+    (data.constraints?.length ?? 0) > 0 ||
+    (data.failed_approaches?.length ?? 0) > 0 ||
+    data.state != null ||
+    (data.recent_episodes?.length ?? 0) > 0;
 
   if (!hasContent) return null;
 

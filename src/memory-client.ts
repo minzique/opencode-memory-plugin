@@ -50,11 +50,13 @@ export async function isServiceHealthy(): Promise<boolean> {
 
 export async function remember(
   mem: RememberRequest,
-): Promise<{ id: string } | null> {
-  return request<{ id: string }>("/remember", {
+): Promise<{ id: string; status: string } | null> {
+  const result = await request<{ status: string; id?: string; existing_id?: string }>("/remember", {
     method: "POST",
     body: JSON.stringify(mem),
   });
+  if (!result) return null;
+  return { id: result.id ?? result.existing_id ?? "unknown", status: result.status };
 }
 
 export async function recall(
@@ -87,4 +89,41 @@ export async function saveState(
     },
   );
   return result !== null;
+}
+
+export interface ExtractRequest {
+  text: string;
+  context?: string;
+  source?: string;
+}
+
+export interface ExtractResponse {
+  extracted: number;
+  memory_ids: string[];
+}
+
+// /extract calls LLM server-side — needs longer timeout than standard REST
+const EXTRACT_TIMEOUT_MS = 30_000;
+
+export async function extract(
+  req: ExtractRequest,
+): Promise<ExtractResponse | null> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), EXTRACT_TIMEOUT_MS);
+
+    const response = await fetch(`${MEMORY_SERVICE_URL}/extract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) return null;
+    return (await response.json()) as ExtractResponse;
+  } catch {
+    return null;
+  }
 }

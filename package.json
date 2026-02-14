@@ -1,6 +1,6 @@
 {
   "name": "opencode-memory-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OpenCode plugin for persistent AI agent memory — auto-capture and auto-injection via opencode-memory service",
   "main": "index.ts",
   "type": "module",
