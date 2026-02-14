@@ -1,4 +1,4 @@
-import type { Plugin } from "@opencode-ai/plugin";
+import { type Plugin, tool } from "@opencode-ai/plugin";
 import type { Session, Todo, Model } from "@opencode-ai/sdk";
 import { processEvent, captureSessionState, cleanupSession } from "./src/capture.js";
 import { buildInjection } from "./src/inject.js";
@@ -44,8 +44,30 @@ const contentBuffer = new ContentBuffer({
   },
 });
 
-export const MemoryPlugin: Plugin = async ({ directory }) => {
+export const MemoryPlugin: Plugin = async ({ directory, client }) => {
   const projectId = directory;
+
+  const sessionTitleTool = tool({
+    description:
+      "Update the title of the current session. Use this to set a descriptive name that reflects what you're working on so the user can identify sessions at a glance. " +
+      "Call this whenever you begin a focused task, the scope of work shifts, or the user asks you to rename the session. " +
+      "Keep titles concise (under 80 chars) and descriptive of the current objective.",
+    args: {
+      title: tool.schema
+        .string()
+        .min(1)
+        .max(200)
+        .describe("New session title — concise and descriptive of the current task"),
+    },
+    async execute(args, context) {
+      const result = await client.session.update({
+        path: { id: context.sessionID },
+        body: { title: args.title },
+      });
+      if (result.error) return `Failed to update session title: ${JSON.stringify(result.error)}`;
+      return `Session title updated to: ${args.title}`;
+    },
+  });
 
   const healthy = await isServiceHealthy();
   if (!healthy) {
@@ -241,6 +263,7 @@ export const MemoryPlugin: Plugin = async ({ directory }) => {
       memory_remember: rememberTool,
       memory_recall: recallTool,
       memory_bootstrap: bootstrapTool,
+      session_title: sessionTitleTool,
     },
   };
 };
