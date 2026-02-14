@@ -32,6 +32,9 @@ const DECISION_PATTERNS =
 const FAILURE_PATTERNS =
   /\b(failed|error|bug|broken|doesn'?t work|crash|exception|stacktrace|traceback|ENOENT|ECONNREFUSED|TypeError|SyntaxError)\b/i;
 
+/** Types that should default to global scope */
+const GLOBAL_SCOPE_TYPES = new Set(["preference", "convention"]);
+
 /** Tools that modify files — their outputs reflect architectural decisions */
 const FILE_MUTATION_TOOLS = new Set([
   "write", "edit", "bash",
@@ -83,7 +86,7 @@ function extractFromPart(part: Part): ExtractedMemory[] {
       const sentences = text
         .split(/[.!?\n]+/)
         .filter((s: string) => s.length > 20);
-      for (const sentence of sentences.slice(0, 3)) {
+      for (const sentence of sentences.slice(0, 8)) {
         if (DECISION_PATTERNS.test(sentence)) {
           memories.push({
             content: sentence.trim().slice(0, 1000),

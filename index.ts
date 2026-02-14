@@ -23,6 +23,8 @@ const sessionTodos = new Map<string, Todo[]>();
 const sessionMessageCounts = new Map<string, number>();
 
 /** Content buffer for batch LLM extraction */
+let _pluginProjectId = "";
+
 const contentBuffer = new ContentBuffer({
   maxSize: 5,
   flushIntervalMs: 30_000,
@@ -34,6 +36,7 @@ const contentBuffer = new ContentBuffer({
       text: combined,
       context: items[0]?.context,
       source: "auto-capture:batch",
+      project_id: _pluginProjectId || undefined,
     });
 
     if (result) {
@@ -46,6 +49,7 @@ const contentBuffer = new ContentBuffer({
 
 export const MemoryPlugin: Plugin = async ({ directory, client }) => {
   const projectId = directory;
+  _pluginProjectId = projectId;
 
   const sessionTitleTool = tool({
     description:
@@ -152,11 +156,13 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
       if (text.length < 15) return;
 
       const CONSTRAINT_RE = /\b(always|never|must|don't|do not|prefer|avoid|make sure|ensure)\b/i;
+      const PREFERENCE_RE = /\b(prefer|like|want|enjoy|i'd rather)\b/i;
       if (CONSTRAINT_RE.test(text) && text.length > 20) {
+        const isPreference = PREFERENCE_RE.test(text) && !(/\b(must|never|always|ensure)\b/i.test(text));
         remember({
           content: text.slice(0, 2000),
-          type: "constraint",
-          scope: "project",
+          type: isPreference ? "preference" : "constraint",
+          scope: isPreference ? "global" : "project",
           project_id: projectId,
           tags: ["user-directive", "auto-captured"],
           source: `user:${input.sessionID}`,
@@ -166,7 +172,7 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
 
       if (text.length > 100) {
         contentBuffer.add({
-          text: `[User message] ${text.slice(0, 3000)}`,
+          text: `[Assistant response] ${text.slice(0, 3000)}`,
           context: `session:${input.sessionID} project:${projectId}`,
         });
       }

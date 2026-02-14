@@ -11,16 +11,23 @@ export const rememberTool = tool({
       .enum([
         "decision",
         "constraint",
+        "architecture",
         "pattern",
+        "convention",
+        "preference",
+        "error-solution",
         "fact",
         "failure",
-        "preference",
       ])
-      .describe("Memory type"),
+      .describe(
+        "Memory type: decision (explicit choice), constraint (rule/boundary), architecture (system design), " +
+        "pattern (recurring technique), convention (naming/style agreement), preference (personal taste), " +
+        "error-solution (problem + fix), fact (general knowledge), failure (something that broke)",
+      ),
     scope: tool.schema
       .enum(["global", "project", "session"])
       .default("project")
-      .describe("Memory scope"),
+      .describe("Memory scope: global (cross-project), project (this repo), session (ephemeral)"),
     tags: tool.schema
       .string()
       .optional()
@@ -62,7 +69,7 @@ export const recallTool = tool({
       .string()
       .optional()
       .describe(
-        "Comma-separated memory types to filter: decision,constraint,pattern,fact,failure,preference",
+        "Comma-separated memory types to filter: decision,constraint,architecture,pattern,convention,preference,error-solution,fact,failure",
       ),
   },
   async execute(args, context) {

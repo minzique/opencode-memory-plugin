@@ -96,6 +96,8 @@ export interface ExtractRequest {
   text: string;
   context?: string;
   source?: string;
+  project_id?: string;
+  scope?: string;
 }
 
 export interface ExtractResponse {

@@ -6,15 +6,18 @@
 /** Memory service base URL — Mac Mini runs the service */
 export const MEMORY_SERVICE_URL = "http://minzis-mac-mini.local:4097";
 
-/** Memory types matching the memory service schema */
+/** Memory types matching the memory service schema (all 11) */
 export type MemoryType =
   | "decision"
   | "constraint"
+  | "architecture"
   | "pattern"
+  | "convention"
+  | "preference"
+  | "error-solution"
   | "fact"
   | "episode"
   | "failure"
-  | "preference"
   | "working_context";
 
 /** Scope for a memory */
