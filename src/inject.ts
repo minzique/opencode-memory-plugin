@@ -24,10 +24,25 @@ export function computeBudget(model?: Pick<Model, "limit">): number {
   return Math.max(MIN_BUDGET_CHARS, Math.min(MAX_BUDGET_CHARS, Math.round(budgetChars)));
 }
 
+// ---------------------------------------------------------------------------
+// Tier 0 (always present): tool awareness and self-knowledge
+// This block is OUTSIDE the budget — it's essential for the agent to function.
+// Kept minimal: ~350 chars (~90 tokens). Non-negotiable.
+// ---------------------------------------------------------------------------
+
+const SELF_AWARENESS_BLOCK = `# Persistent Memory System
+
+You have persistent memory across sessions. Your tools:
+- \`memory_remember\`: Store decisions, constraints, patterns, facts, or failures
+- \`memory_recall\`: Semantic search across all stored memories
+- \`memory_bootstrap\`: Load full context (working state, constraints, memories, episodes)
+
+If this is a new session or context seems incomplete, run \`memory_bootstrap\` first.`;
+
 // --- Tiered sections by priority ---
 // 1 (critical):    working state + constraints
 // 2 (important):   failed approaches
-// 3 (enrichment):  key memories
+// 3 (enrichment):  key memories (includes identity, architecture facts)
 // 4 (context):     episodes — only for large budgets
 
 interface TieredSection {
@@ -124,8 +139,18 @@ function assembleSections(sections: TieredSection[], budgetChars: number): strin
 
 /**
  * Build the system prompt injection, scaled to model context window.
- * Uses tiered priority: state/constraints always included, rest if budget allows.
- * Decays injection size as session grows (agent has increasing organic context).
+ *
+ * Architecture:
+ *   - Tier 0 (self-awareness): ALWAYS injected, outside budget. The agent must
+ *     know it has memory tools even if the memory store is empty.
+ *   - Tiers 1-4 (memory content): Budget-controlled, priority-ordered.
+ *     State/constraints first, then failures, then key memories, then episodes.
+ *
+ * Identity and infrastructure knowledge live in stored memories (type: architecture,
+ * fact) — they get injected naturally via tier 3 key memories.
+ * No hardcoded names or URLs in the plugin code.
+ *
+ * Returns null ONLY when the memory service is completely unreachable.
  */
 export async function buildInjection(
   projectId: string,
@@ -151,6 +176,7 @@ export async function buildInjection(
     max_memories: memoryLimit,
   });
 
+  // Service unreachable — the only case where we return null
   if (!data) return null;
 
   const hasContent =
@@ -160,22 +186,27 @@ export async function buildInjection(
     data.state != null ||
     (data.recent_episodes?.length ?? 0) > 0;
 
-  if (!hasContent) return null;
+  // Even with empty memory, the agent needs to know it HAS memory tools.
+  // This is the critical fix: previously we returned null here, leaving
+  // the agent completely unaware of its persistent memory system.
+  if (!hasContent) {
+    return [
+      SELF_AWARENESS_BLOCK,
+      "",
+      "No memories stored yet. Use `memory_remember` to start building persistent knowledge.",
+    ].join("\n");
+  }
 
   const sections = buildTieredSections(data);
   const formatted = assembleSections(sections, budget);
-  if (formatted.length < 20) return null;
 
   const disclosure = budget < 3000
     ? "\nUse `memory_bootstrap` or `memory_recall` tools for full context."
     : "\nMore context available via `memory_recall` tool.";
 
-  const contextInfo = model?.limit?.context
-    ? ` (~${Math.round(budget / CHARS_PER_TOKEN)} of ${model.limit.context} tokens)`
-    : "";
-
   return [
-    `# Persistent Memory Context${contextInfo}`,
+    SELF_AWARENESS_BLOCK,
+    "",
     formatted,
     disclosure,
   ].join("\n\n");
