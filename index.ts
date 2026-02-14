@@ -1,5 +1,5 @@
 import type { Plugin } from "@opencode-ai/plugin";
-import type { Session, Todo } from "@opencode-ai/sdk";
+import type { Session, Todo, Model } from "@opencode-ai/sdk";
 import { processEvent, captureSessionState, cleanupSession } from "./src/capture.js";
 import { buildInjection } from "./src/inject.js";
 import { rememberTool, recallTool, bootstrapTool } from "./src/tools.js";
@@ -15,11 +15,11 @@ const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const IDLE_SAVE_DELAY_MS = 10_000;
 const injectedSessions = new Set<string>();
 
-/** Track session metadata for richer working state */
 const sessionMeta = new Map<string, { title: string; directory: string; created: number }>();
-
-/** Track last known todos per session */
 const sessionTodos = new Map<string, Todo[]>();
+
+/** Track message count per session for injection decay */
+const sessionMessageCounts = new Map<string, number>();
 
 /** Content buffer for batch LLM extraction */
 const contentBuffer = new ContentBuffer({
@@ -103,6 +103,7 @@ export const MemoryPlugin: Plugin = async ({ directory }) => {
         injectedSessions.delete(sessionId);
         sessionMeta.delete(sessionId);
         sessionTodos.delete(sessionId);
+        sessionMessageCounts.delete(sessionId);
         if (idleTimers.has(sessionId)) {
           clearTimeout(idleTimers.get(sessionId)!);
           idleTimers.delete(sessionId);
@@ -116,7 +117,10 @@ export const MemoryPlugin: Plugin = async ({ directory }) => {
      * Also buffers significant content for batch LLM extraction.
      */
     async "chat.message"(input, output) {
-      // Extract user text from parts
+      // Increment message counter for injection decay
+      const count = (sessionMessageCounts.get(input.sessionID) ?? 0) + 1;
+      sessionMessageCounts.set(input.sessionID, count);
+
       const textParts = output.parts
         .filter((p): p is typeof p & { type: "text"; text: string } => p.type === "text")
         .map((p) => p.text);
@@ -124,7 +128,6 @@ export const MemoryPlugin: Plugin = async ({ directory }) => {
       const text = textParts.join("\n");
       if (text.length < 15) return;
 
-      // Capture user constraints/directives
       const CONSTRAINT_RE = /\b(always|never|must|don't|do not|prefer|avoid|make sure|ensure)\b/i;
       if (CONSTRAINT_RE.test(text) && text.length > 20) {
         remember({
@@ -138,7 +141,6 @@ export const MemoryPlugin: Plugin = async ({ directory }) => {
         }).catch(() => {});
       }
 
-      // Buffer significant user messages for batch extraction
       if (text.length > 100) {
         contentBuffer.add({
           text: `[User message] ${text.slice(0, 3000)}`,
@@ -156,7 +158,8 @@ export const MemoryPlugin: Plugin = async ({ directory }) => {
       if (!sessionId) return;
       if (injectedSessions.has(sessionId)) return;
 
-      const injection = await buildInjection(projectId);
+      const messageCount = sessionMessageCounts.get(sessionId) ?? 0;
+      const injection = await buildInjection(projectId, input.model, messageCount);
       if (!injection) return;
 
       injectedSessions.add(sessionId);
@@ -168,7 +171,6 @@ export const MemoryPlugin: Plugin = async ({ directory }) => {
      * Saves rich working state + instructs compactor to keep key info.
      */
     async "experimental.session.compacting"(input, output) {
-      // Flush any pending content buffer before compaction
       await contentBuffer.flush();
 
       const meta = sessionMeta.get(input.sessionID);
