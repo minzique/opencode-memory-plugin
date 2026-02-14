@@ -35,9 +35,10 @@ async function request<T>(
       return null;
     }
 
-    return (await response.json()) as T;
+    const text = await response.text();
+    if (!text) return null;
+    return JSON.parse(text) as T;
   } catch (error) {
-    // Service down or network issue — fail silently, memory is best-effort
     console.error(`[memory-plugin] ${path} error:`, error);
     return null;
   }
@@ -122,7 +123,9 @@ export async function extract(
     clearTimeout(timeout);
 
     if (!response.ok) return null;
-    return (await response.json()) as ExtractResponse;
+    const text = await response.text();
+    if (!text) return null;
+    return JSON.parse(text) as ExtractResponse;
   } catch {
     return null;
   }
