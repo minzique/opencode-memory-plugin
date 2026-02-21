@@ -92,6 +92,27 @@ export async function saveState(
   return result !== null;
 }
 
+export interface EpisodePayload {
+  session_id: string;
+  project_id: string;
+  summary: string;
+  todos?: Array<{ content: string; status: string; priority: string }>;
+  decisions?: Array<{ content: string; context?: string; confidence?: number }>;
+  constraints?: Array<{ content: string; type?: string; source?: string }>;
+  failed_approaches?: Array<{ approach: string; error?: string; context?: string }>;
+  explored_files?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export async function saveEpisode(
+  ep: EpisodePayload,
+): Promise<{ id: string; extracted_memories: number } | null> {
+  return request<{ id: string; extracted_memories: number }>("/episode", {
+    method: "POST",
+    body: JSON.stringify(ep),
+  });
+}
+
 export interface ExtractRequest {
   text: string;
   context?: string;

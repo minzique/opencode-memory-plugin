@@ -7,6 +7,8 @@ import {
   isServiceHealthy,
   remember,
   saveState,
+  saveEpisode,
+  extract,
 } from "./src/memory-client.js";
 
 const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -15,8 +17,11 @@ const injectedSessions = new Set<string>();
 
 const sessionMeta = new Map<string, { title: string; directory: string; created: number }>();
 const sessionTodos = new Map<string, Todo[]>();
+const sessionFilesTouched = new Map<string, Set<string>>();
 
 const sessionMessageCounts = new Map<string, number>();
+
+const DECISION_SIGNAL = /\b(decided|going with|let'?s use|architecture|approach|design|implement|switch to|migrate|choose)\b/i;
 
 export const MemoryPlugin: Plugin = async ({ directory, client }) => {
   const projectId = directory;
@@ -68,13 +73,22 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
         });
       }
 
-      // Todo tracking — capture progress snapshots
       if (event.type === "todo.updated") {
         const props = event.properties as { sessionID: string; todos: Todo[] };
         sessionTodos.set(props.sessionID, props.todos);
       }
 
-      // On idle, debounce a rich working state save
+      if (event.type === "message.part.updated") {
+        const part = (event.properties as { part: { type: string; tool?: string; state?: { status: string; input?: Record<string, unknown> } } }).part;
+        if (part.type === "tool" && part.state?.status === "completed" && part.state.input) {
+          const filePath = (part.state.input.filePath ?? part.state.input.path) as string | undefined;
+          if (filePath) {
+            const sid = (event.properties as { sessionID?: string }).sessionID ?? "unknown";
+            if (!sessionFilesTouched.has(sid)) sessionFilesTouched.set(sid, new Set());
+            sessionFilesTouched.get(sid)!.add(filePath);
+          }
+        }
+      }
       if (event.type === "session.idle") {
         const sessionId = (event.properties as { sessionID: string }).sessionID;
 
@@ -87,7 +101,8 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
           setTimeout(() => {
             const meta = sessionMeta.get(sessionId);
             const todos = sessionTodos.get(sessionId);
-            captureRichSessionState(sessionId, projectId, meta, todos).catch(() => {});
+            const files = sessionFilesTouched.get(sessionId);
+            captureRichSessionState(sessionId, projectId, meta, todos, files).catch(() => {});
             idleTimers.delete(sessionId);
           }, IDLE_SAVE_DELAY_MS),
         );
@@ -100,6 +115,7 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
         injectedSessions.delete(sessionId);
         sessionMeta.delete(sessionId);
         sessionTodos.delete(sessionId);
+        sessionFilesTouched.delete(sessionId);
         sessionMessageCounts.delete(sessionId);
         if (idleTimers.has(sessionId)) {
           clearTimeout(idleTimers.get(sessionId)!);
@@ -146,6 +162,15 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
           confidence: 0.75,
         }).catch(() => {});
       }
+
+      if (text.length >= 100 && text.length <= 2000 && DECISION_SIGNAL.test(text)) {
+        extract({
+          text: text.slice(0, 2000),
+          context: `user message in session ${input.sessionID}`,
+          source: `user:${input.sessionID}`,
+          project_id: projectId,
+        }).catch(() => {});
+      }
     },
 
     /**
@@ -172,7 +197,26 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
     async "experimental.session.compacting"(input, output) {
       const meta = sessionMeta.get(input.sessionID);
       const todos = sessionTodos.get(input.sessionID);
-      await captureRichSessionState(input.sessionID, projectId, meta, todos);
+      const files = sessionFilesTouched.get(input.sessionID);
+      await captureRichSessionState(input.sessionID, projectId, meta, todos, files);
+
+      const episodeTodos = (todos ?? []).map((t) => ({
+        content: t.content,
+        status: t.status,
+        priority: t.priority ?? "medium",
+      }));
+
+      saveEpisode({
+        session_id: input.sessionID,
+        project_id: projectId,
+        summary: meta?.title ?? "Session compacted",
+        todos: episodeTodos,
+        explored_files: files ? [...files].slice(0, 50) : [],
+        metadata: {
+          compacted_at: new Date().toISOString(),
+          message_count: sessionMessageCounts.get(input.sessionID) ?? 0,
+        },
+      }).catch(() => {});
 
       output.context.push(
         "IMPORTANT: When summarizing this session, preserve:\n" +
@@ -206,8 +250,8 @@ async function captureRichSessionState(
   projectId: string,
   meta?: { title: string; directory: string; created: number },
   todos?: Todo[],
+  filesTouched?: Set<string>,
 ): Promise<void> {
-  // Build structured state matching WorkingState model
   const completedTodos = todos?.filter((t) => t.status === "completed") ?? [];
   const pendingTodos = todos?.filter((t) => t.status === "pending") ?? [];
   const inProgressTodos = todos?.filter((t) => t.status === "in_progress") ?? [];
@@ -219,11 +263,13 @@ async function captureRichSessionState(
   const nextSteps = [...inProgressTodos, ...pendingTodos]
     .slice(0, 5)
     .map((t) => `[${t.status}] ${t.content}`);
+  const files = filesTouched ? [...filesTouched].slice(0, 30) : [];
 
   await saveState(projectId, {
     objective,
     progress,
     next_steps: nextSteps,
+    files_touched: files,
     metadata: {
       last_session_id: sessionId,
       session_directory: meta?.directory ?? projectId,
