@@ -6,11 +6,8 @@ import { rememberTool, recallTool, bootstrapTool } from "./src/tools.js";
 import {
   isServiceHealthy,
   remember,
-  extract,
   saveState,
-  bootstrap,
 } from "./src/memory-client.js";
-import { ContentBuffer } from "./src/buffer.js";
 
 const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const IDLE_SAVE_DELAY_MS = 10_000;
@@ -19,37 +16,10 @@ const injectedSessions = new Set<string>();
 const sessionMeta = new Map<string, { title: string; directory: string; created: number }>();
 const sessionTodos = new Map<string, Todo[]>();
 
-/** Track message count per session for injection decay */
 const sessionMessageCounts = new Map<string, number>();
-
-/** Content buffer for batch LLM extraction */
-let _pluginProjectId = "";
-
-const contentBuffer = new ContentBuffer({
-  maxSize: 5,
-  flushIntervalMs: 30_000,
-  onFlush: async (items) => {
-    const combined = items.map((i) => i.text).join("\n\n---\n\n");
-    if (combined.length < 50) return;
-
-    const result = await extract({
-      text: combined,
-      context: items[0]?.context,
-      source: "auto-capture:batch",
-      project_id: _pluginProjectId || undefined,
-    });
-
-    if (result) {
-      console.log(
-        `[memory-plugin] Extracted ${result.extracted} memories from batch of ${items.length} items`,
-      );
-    }
-  },
-});
 
 export const MemoryPlugin: Plugin = async ({ directory, client }) => {
   const projectId = directory;
-  _pluginProjectId = projectId;
 
   const sessionTitleTool = tool({
     description:
@@ -155,26 +125,26 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
       const text = textParts.join("\n");
       if (text.length < 15) return;
 
-      const CONSTRAINT_RE = /\b(always|never|must|don't|do not|prefer|avoid|make sure|ensure)\b/i;
+      // Skip mode preambles like "[analyze-mode] ANALYSIS MODE..."
+      if (/^\[[\w-]+\]/.test(text.trim())) return;
+      // Skip long messages — these are instructions TO the agent, not user constraints
+      if (text.length > 500) return;
+
+      const CONSTRAINT_RE = /\b(always|never|must|don't|do not|avoid|make sure|ensure)\b/i;
       const PREFERENCE_RE = /\b(prefer|like|want|enjoy|i'd rather)\b/i;
-      if (CONSTRAINT_RE.test(text) && text.length > 20) {
-        const isPreference = PREFERENCE_RE.test(text) && !(/\b(must|never|always|ensure)\b/i.test(text));
+      const first200 = text.slice(0, 200);
+
+      if (CONSTRAINT_RE.test(first200) && text.length > 40) {
+        const isPreference = PREFERENCE_RE.test(first200) && !(/\b(must|never|always|ensure)\b/i.test(first200));
         remember({
-          content: text.slice(0, 2000),
+          content: text.slice(0, 200),
           type: isPreference ? "preference" : "constraint",
           scope: isPreference ? "global" : "project",
           project_id: projectId,
-          tags: ["user-directive", "auto-captured"],
+          tags: ["user-directive"],
           source: `user:${input.sessionID}`,
           confidence: 0.75,
         }).catch(() => {});
-      }
-
-      if (text.length > 100) {
-        contentBuffer.add({
-          text: `[Assistant response] ${text.slice(0, 3000)}`,
-          context: `session:${input.sessionID} project:${projectId}`,
-        });
       }
     },
 
@@ -200,69 +170,19 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
      * Saves rich working state + instructs compactor to keep key info.
      */
     async "experimental.session.compacting"(input, output) {
-      await contentBuffer.flush();
-
       const meta = sessionMeta.get(input.sessionID);
       const todos = sessionTodos.get(input.sessionID);
       await captureRichSessionState(input.sessionID, projectId, meta, todos);
 
-      // Compaction uses gemini-3-flash (1M context) — dump full context for richer summaries
       output.context.push(
-        "IMPORTANT: When summarizing, preserve all decisions, constraints, " +
-          "failure patterns, and architectural choices. These feed the persistent " +
-          "memory system — losing them degrades future sessions.",
+        "IMPORTANT: When summarizing this session, preserve:\n" +
+          "1. All explicit decisions made (technology choices, architecture, approach)\n" +
+          "2. All user constraints and preferences stated\n" +
+          "3. All failed approaches and why they failed\n" +
+          "4. Current task status and next steps\n" +
+          "5. Files actively being modified\n" +
+          "Strip any <thinking> blocks — only include the visible output.",
       );
-
-      // Load full bootstrap and inject into compaction context so the summary includes everything
-      const bootstrapData = await bootstrap({
-        project_id: projectId,
-        include_episodes: true,
-        max_memories: 30,
-      });
-
-      if (bootstrapData) {
-        const sections: string[] = [];
-        const { state, constraints, failed_approaches, memories, recent_episodes } = bootstrapData;
-
-        if (state && Object.keys(state).length > 0) {
-          sections.push("PERSISTED STATE:\n" + JSON.stringify(state, null, 2));
-        }
-
-        if (constraints && constraints.length > 0) {
-          sections.push(
-            "ACTIVE CONSTRAINTS:\n" +
-              constraints.map((m) => `- ${m.content}`).join("\n"),
-          );
-        }
-
-        if (failed_approaches && failed_approaches.length > 0) {
-          sections.push(
-            "KNOWN FAILURES (do not repeat):\n" +
-              failed_approaches.map((m) => `- ${m.content}`).join("\n"),
-          );
-        }
-
-        if (memories && memories.length > 0) {
-          sections.push(
-            "KEY MEMORIES:\n" +
-              memories.map((m) => `- [${m.type}] ${m.content}`).join("\n"),
-          );
-        }
-
-        if (recent_episodes && recent_episodes.length > 0) {
-          sections.push(
-            "PRIOR SESSION SUMMARIES:\n" +
-              recent_episodes.map((e) => `- ${e.summary}`).join("\n"),
-          );
-        }
-
-        if (sections.length > 0) {
-          output.context.push(
-            "PERSISTENT MEMORY (include relevant items in your summary):\n\n" +
-              sections.join("\n\n"),
-          );
-        }
-      }
     },
 
     tool: {
