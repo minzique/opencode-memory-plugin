@@ -1,11 +1,10 @@
 import { type Plugin, tool } from "@opencode-ai/plugin";
-import type { Session, Todo, Model } from "@opencode-ai/sdk";
+import type { Session, Todo } from "@opencode-ai/sdk";
 import { processEvent, captureSessionState, cleanupSession } from "./src/capture.js";
 import { buildInjection } from "./src/inject.js";
 import { rememberTool, recallTool, bootstrapTool } from "./src/tools.js";
 import {
   isServiceHealthy,
-  remember,
   saveState,
   saveEpisode,
   extract,
@@ -21,7 +20,10 @@ const sessionFilesTouched = new Map<string, Set<string>>();
 
 const sessionMessageCounts = new Map<string, number>();
 
-const DECISION_SIGNAL = /\b(decided|going with|let'?s use|architecture|approach|design|implement|switch to|migrate|choose)\b/i;
+const extractionBuffers = new Map<string, string[]>();
+const extractionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const EXTRACTION_FLUSH_DELAY_MS = 15_000;
+const EXTRACTION_BUFFER_MAX = 5;
 
 export const MemoryPlugin: Plugin = async ({ directory, client }) => {
   const projectId = directory;
@@ -111,12 +113,18 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
       // Cleanup on session delete
       if (event.type === "session.deleted") {
         const sessionId = (event.properties as { info: Session }).info.id;
+        flushExtractionBuffer(sessionId, projectId);
         cleanupSession(sessionId);
         injectedSessions.delete(sessionId);
         sessionMeta.delete(sessionId);
         sessionTodos.delete(sessionId);
         sessionFilesTouched.delete(sessionId);
         sessionMessageCounts.delete(sessionId);
+        extractionBuffers.delete(sessionId);
+        if (extractionTimers.has(sessionId)) {
+          clearTimeout(extractionTimers.get(sessionId)!);
+          extractionTimers.delete(sessionId);
+        }
         if (idleTimers.has(sessionId)) {
           clearTimeout(idleTimers.get(sessionId)!);
           idleTimers.delete(sessionId);
@@ -124,13 +132,7 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
       }
     },
 
-    /**
-     * Chat message hook — intercept user messages to capture constraints/preferences.
-     * The user's text arrives in output.parts (TextPart[]), not output.message.
-     * Also buffers significant content for batch LLM extraction.
-     */
     async "chat.message"(input, output) {
-      // Increment message counter for injection decay
       const count = (sessionMessageCounts.get(input.sessionID) ?? 0) + 1;
       sessionMessageCounts.set(input.sessionID, count);
 
@@ -139,37 +141,24 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
         .map((p) => p.text);
 
       const text = textParts.join("\n");
-      if (text.length < 15) return;
+      if (text.length < 20) return;
 
-      // Skip mode preambles like "[analyze-mode] ANALYSIS MODE..."
-      if (/^\[[\w-]+\]/.test(text.trim())) return;
-      // Skip long messages — these are instructions TO the agent, not user constraints
-      if (text.length > 500) return;
+      // Hard skip: system directives, mode preambles, structured task prompts
+      const trimmed = text.trim();
+      if (/^\[[\w-]+\]/.test(trimmed)) return;
+      if (/^---\s*$|^\[SYSTEM|^1\.\s+TASK:|^TASK:/m.test(trimmed)) return;
 
-      const CONSTRAINT_RE = /\b(always|never|must|don't|do not|avoid|make sure|ensure)\b/i;
-      const PREFERENCE_RE = /\b(prefer|like|want|enjoy|i'd rather)\b/i;
-      const first200 = text.slice(0, 200);
+      // Buffer for LLM extraction — let the model decide what's worth storing
+      const sid = input.sessionID;
+      if (!extractionBuffers.has(sid)) extractionBuffers.set(sid, []);
+      extractionBuffers.get(sid)!.push(text.slice(0, 500));
 
-      if (CONSTRAINT_RE.test(first200) && text.length > 40) {
-        const isPreference = PREFERENCE_RE.test(first200) && !(/\b(must|never|always|ensure)\b/i.test(first200));
-        remember({
-          content: text.slice(0, 200),
-          type: isPreference ? "preference" : "constraint",
-          scope: isPreference ? "global" : "project",
-          project_id: projectId,
-          tags: ["user-directive"],
-          source: `user:${input.sessionID}`,
-          confidence: 0.75,
-        }).catch(() => {});
-      }
-
-      if (text.length >= 100 && text.length <= 2000 && DECISION_SIGNAL.test(text)) {
-        extract({
-          text: text.slice(0, 2000),
-          context: `user message in session ${input.sessionID}`,
-          source: `user:${input.sessionID}`,
-          project_id: projectId,
-        }).catch(() => {});
+      // Flush when buffer is full or after delay
+      if (extractionBuffers.get(sid)!.length >= EXTRACTION_BUFFER_MAX) {
+        flushExtractionBuffer(sid, projectId);
+      } else {
+        if (extractionTimers.has(sid)) clearTimeout(extractionTimers.get(sid)!);
+        extractionTimers.set(sid, setTimeout(() => flushExtractionBuffer(sid, projectId), EXTRACTION_FLUSH_DELAY_MS));
       }
     },
 
@@ -195,6 +184,7 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
      * Saves rich working state + instructs compactor to keep key info.
      */
     async "experimental.session.compacting"(input, output) {
+      flushExtractionBuffer(input.sessionID, projectId);
       const meta = sessionMeta.get(input.sessionID);
       const todos = sessionTodos.get(input.sessionID);
       const files = sessionFilesTouched.get(input.sessionID);
@@ -219,13 +209,15 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
       }).catch(() => {});
 
       output.context.push(
-        "IMPORTANT: When summarizing this session, preserve:\n" +
-          "1. All explicit decisions made (technology choices, architecture, approach)\n" +
-          "2. All user constraints and preferences stated\n" +
-          "3. All failed approaches and why they failed\n" +
-          "4. Current task status and next steps\n" +
-          "5. Files actively being modified\n" +
-          "Strip any <thinking> blocks — only include the visible output.",
+        "COMPACTION INSTRUCTIONS — structure your summary for session continuity:\n" +
+          "1. OBJECTIVE: What is being worked on (one sentence)\n" +
+          "2. PROGRESS: What was accomplished this session (bullet points)\n" +
+          "3. CURRENT STATE: What was happening when context ran out\n" +
+          "4. DECISIONS: Any technology/architecture/approach choices made\n" +
+          "5. FAILED: What was tried and didn't work (so next session doesn't repeat)\n" +
+          "6. NEXT STEPS: Concrete actions for the next session\n" +
+          "7. FILES: Key files being modified\n" +
+          "Strip <thinking> blocks. Keep total under 3000 tokens. Be specific, not vague.",
       );
     },
 
@@ -282,6 +274,26 @@ async function captureRichSessionState(
       } : undefined,
     },
   });
+}
+
+function flushExtractionBuffer(sessionId: string, projectId: string): void {
+  const buffer = extractionBuffers.get(sessionId);
+  if (!buffer || buffer.length === 0) return;
+
+  const combined = buffer.join("\n---\n").slice(0, 3000);
+  extractionBuffers.set(sessionId, []);
+
+  if (extractionTimers.has(sessionId)) {
+    clearTimeout(extractionTimers.get(sessionId)!);
+    extractionTimers.delete(sessionId);
+  }
+
+  extract({
+    text: combined,
+    context: `user messages in session ${sessionId}`,
+    source: `user:${sessionId}`,
+    project_id: projectId,
+  }).catch(() => {});
 }
 
 export default MemoryPlugin;
