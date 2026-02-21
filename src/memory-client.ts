@@ -5,6 +5,10 @@ import {
   type RecallResponse,
   type BootstrapRequest,
   type BootstrapResponse,
+  type CreateTodoRequest,
+  type UpdateTodoRequest,
+  type PersistentTodo,
+  type TodoListResponse,
 } from "./types.js";
 
 const TIMEOUT_MS = 5000;
@@ -152,4 +156,48 @@ export async function extract(
   } catch {
     return null;
   }
+}
+
+// ─── Persistent Todos ─────────────────────────────────────────
+
+export async function createTodo(
+  req: CreateTodoRequest,
+): Promise<PersistentTodo | null> {
+  return request<PersistentTodo>("/todos", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export async function listTodos(
+  projectId?: string,
+  opts: { status?: string; includeCompleted?: boolean; limit?: number } = {},
+): Promise<TodoListResponse | null> {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project_id", projectId);
+  if (opts.status) params.set("status", opts.status);
+  if (opts.includeCompleted) params.set("include_completed", "true");
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  return request<TodoListResponse>(`/todos${qs ? `?${qs}` : ""}`);
+}
+
+export async function updateTodo(
+  todoId: string,
+  updates: UpdateTodoRequest,
+): Promise<PersistentTodo | null> {
+  return request<PersistentTodo>(`/todos/${encodeURIComponent(todoId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function deleteTodo(
+  todoId: string,
+): Promise<boolean> {
+  // DELETE returns 204 no content — request() returns null for empty body
+  await request<null>(`/todos/${encodeURIComponent(todoId)}`, {
+    method: "DELETE",
+  });
+  return true;
 }

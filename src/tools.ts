@@ -1,5 +1,6 @@
 import { tool } from "@opencode-ai/plugin";
 import * as client from "./memory-client.js";
+import { getBootstrapTodos } from "./todo-sync.js";
 import type { MemoryType, MemoryScope } from "./types.js";
 
 export const rememberTool = tool({
@@ -188,6 +189,14 @@ export const bootstrapTool = tool({
         .slice(0, 5)
         .map((e) => `- ${truncateContent(e.summary, 150)}`);
       sections.push("## Episodes\n" + items.join("\n"));
+    }
+
+    // Persistent todos — cross-session task list
+    try {
+      const todoSection = await getBootstrapTodos(context.directory);
+      if (todoSection) sections.push(todoSection);
+    } catch {
+      // Non-critical — don't block bootstrap if todo fetch fails
     }
 
     if (sections.length === 0) return "No memories stored yet for this project.";

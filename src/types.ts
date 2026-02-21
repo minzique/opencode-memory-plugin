@@ -106,3 +106,49 @@ export interface ExtractedMemory {
   source: string;
   confidence: number;
 }
+
+// ─── Persistent Todos ─────────────────────────────────────────────
+
+export type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
+export type TodoPriority = "high" | "medium" | "low";
+
+/** Request to create a persistent todo (POST /todos) */
+export interface CreateTodoRequest {
+  content: string;
+  project_id?: string;
+  priority?: TodoPriority;
+  status?: TodoStatus;
+  tags?: string[];
+  parent_id?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Request to update a persistent todo (PATCH /todos/:id) */
+export interface UpdateTodoRequest {
+  content?: string;
+  status?: TodoStatus;
+  priority?: TodoPriority;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+/** A persistent todo as returned by the API */
+export interface PersistentTodo {
+  id: string;
+  content: string;
+  project_id: string | null;
+  status: TodoStatus;
+  priority: TodoPriority;
+  tags: string[];
+  parent_id: string | null;
+  created_at: number;
+  updated_at: number;
+  completed_at: number | null;
+  metadata: Record<string, unknown>;
+}
+
+/** Response from GET /todos */
+export interface TodoListResponse {
+  todos: PersistentTodo[];
+  total: number;
+}

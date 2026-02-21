@@ -3,6 +3,7 @@ import type { Session, Todo } from "@opencode-ai/sdk";
 import { processEvent, captureSessionState, cleanupSession } from "./src/capture.js";
 import { buildInjection } from "./src/inject.js";
 import { rememberTool, recallTool, bootstrapTool } from "./src/tools.js";
+import { onTodoUpdated, cleanupSyncState, getBootstrapTodos } from "./src/todo-sync.js";
 import {
   isServiceHealthy,
   saveState,
@@ -78,6 +79,7 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
       if (event.type === "todo.updated") {
         const props = event.properties as { sessionID: string; todos: Todo[] };
         sessionTodos.set(props.sessionID, props.todos);
+        onTodoUpdated(props.sessionID, props.todos, projectId);
       }
 
       if (event.type === "message.part.updated") {
@@ -129,6 +131,7 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
           clearTimeout(idleTimers.get(sessionId)!);
           idleTimers.delete(sessionId);
         }
+        cleanupSyncState(sessionId);
       }
     },
 
